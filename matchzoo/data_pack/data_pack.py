@@ -10,6 +10,11 @@ from tqdm import tqdm
 import numpy as np
 import pandas as pd
 
+from multiprocessing import Pool
+from functools import partial 
+
+import time
+
 import matchzoo
 
 tqdm.pandas()
@@ -25,6 +30,8 @@ def _convert_to_list_index(
         index = list(range(*index.indices(length)))
     return index
 
+def _func_on_df(func, df):
+    return df.apply(func)
 
 class DataPack(object):
     """
@@ -352,6 +359,7 @@ class DataPack(object):
         self, func: typing.Callable,
         mode: str = 'both',
         rename: typing.Optional[str] = None,
+        n_cores: int = 1,
         verbose: int = 1
     ):
         """
@@ -401,35 +409,47 @@ class DataPack(object):
 
         """
         if mode == 'both':
-            self._apply_on_text_both(func, rename, verbose=verbose)
+            self._apply_on_text_both(func, rename, n_cores=n_cores, verbose=verbose)
         elif mode == 'left':
-            self._apply_on_text_left(func, rename, verbose=verbose)
+            self._apply_on_text_left(func, rename, n_cores=n_cores, verbose=verbose)
         elif mode == 'right':
-            self._apply_on_text_right(func, rename, verbose=verbose)
+            self._apply_on_text_right(func, rename, n_cores=n_cores, verbose=verbose)
         else:
             raise ValueError(f"{mode} is not a valid mode type."
                              f"Must be one of `left` `right` `both`.")
 
-    def _apply_on_text_right(self, func, rename, verbose=1):
+    def _apply_on_text_right(self, func, rename, n_cores=1, verbose=1):
         name = rename or 'text_right'
         if verbose:
-            tqdm.pandas(desc="Processing " + name + " with " + func.__name__)
-            self._right[name] = self._right['text_right'].progress_apply(func)
+            self._right[name] = self._parallelize_progress(self._right['text_right'], func, n_cores, name)
         else:
-            self._right[name] = self._right['text_right'].apply(func)
+            self._right[name] = self._parallelize(self._right['text_right'], func, n_cores)
 
-    def _apply_on_text_left(self, func, rename, verbose=1):
+    def _apply_on_text_left(self, func, rename, n_cores=1, verbose=1):
         name = rename or 'text_left'
         if verbose:
-            tqdm.pandas(desc="Processing " + name + " with " + func.__name__)
-            self._left[name] = self._left['text_left'].progress_apply(func)
+            self._left[name] = self._parallelize_progress(self._left['text_left'], func, n_cores, name)
         else:
-            self._left[name] = self._left['text_left'].apply(func)
+            self._left[name] = self._parallelize(self._left['text_left'], func, n_cores)
 
-    def _apply_on_text_both(self, func, rename, verbose=1):
+    def _apply_on_text_both(self, func, rename, n_cores=1, verbose=1):
         left_name, right_name = rename or ('text_left', 'text_right')
-        self._apply_on_text_left(func, rename=left_name, verbose=verbose)
-        self._apply_on_text_right(func, rename=right_name, verbose=verbose)
+        self._apply_on_text_left(func, rename=left_name, n_cores=n_cores, verbose=verbose)
+        self._apply_on_text_right(func, rename=right_name, n_cores=n_cores, verbose=verbose)
+
+    def _parallelize_progress(self, d, func, n_cores, name):
+        with Pool(n_cores) as p:
+            data = list(tqdm(p.map(func, d), total=len(d), desc="Processing " + name + " with " + func.__name__))
+        return data
+
+    def _parallelize(self, data, func, n_cores):
+        data_split = np.array_split(data, n_cores)
+        pool = Pool(n_cores)
+        res = pool.map(partial(_func_on_df, func), data_split)
+        data = pd.concat(res)
+        pool.close()
+        pool.join()
+        return data
 
     @_optional_inplace
     def one_hot_encode_label(self, num_classes=2):

@@ -8,6 +8,7 @@
 *.DS_Store
 .vscode
 .coverage
+.coverage.*
 .ipynb_checkpoints/
 predict.*
 build/
